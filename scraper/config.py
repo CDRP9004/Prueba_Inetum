@@ -15,8 +15,8 @@ def _get_list(key: str, default: str) -> list[str]:
 
 @dataclass(frozen=True)
 class ScraperConfig:
-    base_url: str = os.getenv("SCRAPER_BASE_URL", "https://www.bbva.mx")
-    sitemap_url: str = os.getenv("SCRAPER_SITEMAP_URL", "https://www.bbva.mx/sitemap.xml")
+    base_url: str = os.getenv("SCRAPER_BASE_URL", "https://www.bbva.com.co")
+    sitemap_url: str = os.getenv("SCRAPER_SITEMAP_URL", "https://www.bbva.com.co/sitemap.xml")
     sections: list[str] = field(default_factory=lambda: _get_list("SCRAPER_SECTIONS", "/personas/,/empresas/"))
     max_pages: int = int(os.getenv("SCRAPER_MAX_PAGES", "150"))
     delay_seconds: float = float(os.getenv("SCRAPER_DELAY_SECONDS", "0.5"))

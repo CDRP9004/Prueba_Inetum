@@ -12,6 +12,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from scraper.config import ScraperConfig
+from scraper.http_headers import build_headers
 
 _UNSAFE_CHARS = re.compile(r"[^a-zA-Z0-9._-]+")
 
@@ -37,7 +38,7 @@ def build_session(config: ScraperConfig) -> requests.Session:
     adapter = HTTPAdapter(max_retries=retry)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
-    session.headers.update({"User-Agent": config.user_agent})
+    session.headers.update(build_headers(config.user_agent))
     return session
 
 
