@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Datos scrapeados (se generan con el scraper, no se versionan)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Modelos / caches locales
+.cache/
+models/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
