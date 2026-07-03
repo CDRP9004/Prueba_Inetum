@@ -10,8 +10,8 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 ## Estado actual
 
 - [x] Fase 1 — Estructura base del repositorio
-- [x] Fase 2 — Web scraping (captura de datos crudos)
-- [ ] Fase 3 — Limpieza y normalización de datos
+- [x] Fase 2 — Web scraping (código listo; corpus completo **pendiente** por bloqueo de WAF, ver más abajo)
+- [x] Fase 3 — Limpieza y normalización de datos (código listo y probado; a la espera del corpus de la Fase 2)
 - [ ] Fase 4 — Chunking, embeddings e indexación vectorial
 - [ ] Fase 5 — Pipeline RAG base
 - [ ] Fase 6 — API de chat (FastAPI)
@@ -68,9 +68,10 @@ para mantener tiempos de scraping/indexado acotados en un entorno de solo CPU.
 ```
 .
 ├── data/
-│   ├── raw/            # HTML crudo descargado por el scraper (gitignored)
-│   └── processed/      # Texto limpio (Fase 3, gitignored)
+│   ├── raw/            # HTML crudo + manifest.json descargado por el scraper (gitignored)
+│   └── processed/      # JSON con texto limpio por página (Fase 3, gitignored)
 ├── scraper/             # Módulo de web scraping (Fase 2)
+├── cleaning/             # Módulo de limpieza/normalización (Fase 3)
 ├── requirements.txt
 ├── .env.example
 └── README.md
@@ -115,9 +116,50 @@ python -m scraper.run_scraper
 - El almacenamiento de datos **limpios** (texto normalizado, sin boilerplate de navegación/
   cookies) se implementa en la Fase 3; en esta fase solo se persiste el HTML crudo tal como
   se recibió del servidor.
-- **Limitación conocida:** el WAF de bbva.com.co puede bloquear temporalmente (HTTP 403) toda
-  una IP si detecta muchas requests en poco tiempo — algo fácil de gatillar durante desarrollo
-  iterativo/pruebas. Si al ejecutar `python -m scraper.run_scraper` la mayoría de páginas
-  devuelven error 403 en el manifiesto, es ese bloqueo temporal: esperar 30-60 minutos sin
-  hacer más requests al dominio y volver a correr el comando (usa `_sitemap_cache.xml` /
-  `_robots_cache.txt` si ya existen, así que no vuelve a golpear esos endpoints).
+- **Limitación conocida y estado real de los datos:** el WAF de bbva.com.co bloqueó (HTTP 403)
+  toda la IP de este entorno de desarrollo tras las pruebas repetidas necesarias para
+  diagnosticar el punto anterior. El código del scraper es correcto y fue validado (llegó a
+  descargar 149/150 páginas reales en una corrida previa contra un sitio equivalente antes de
+  corregir el sitio objetivo), pero **al momento de escribir esto `data/raw/manifest.json`
+  refleja 150/150 errores 403** porque el bloqueo seguía activo incluso tras esperar. Pasos
+  para obtener el corpus real:
+  1. Ejecutar `python -m scraper.run_scraper` desde una red/IP distinta a la de este entorno
+     de desarrollo (el bloqueo es por IP, no por el sitio en general — una IP "limpia"
+     probablemente funcione al primer intento, como ocurrió aquí antes de las pruebas
+     repetidas).
+  2. Si se ejecuta desde la misma red donde se desarrolló, esperar un período largo (¿60+ min?
+     no confirmado con certeza cuánto dura el bloqueo) sin hacer ninguna otra request al
+     dominio, y correr el comando una única vez.
+  - Este es el único paso del proyecto bloqueado por un factor externo (infraestructura
+    anti-bot del banco) y no por el código; se documenta con honestidad en vez de simularlo
+    con datos inventados.
+
+## Fase 3 — Limpieza y normalización de datos
+
+Módulo `cleaning/`:
+
+- `config.py`: configuración (directorio de entrada/salida, umbral mínimo de texto).
+- `html_cleaner.py`: quita etiquetas estructurales (`script`, `style`, `nav`, `header`,
+  `footer`, etc.), prioriza el contenido dentro de `<main>` si existe, y descarta líneas de
+  boilerplate conocido del sitio (banner de cookies, textos de accesibilidad del menú como
+  "Ir al contenido principal" o "Pulsa enter") observadas al inspeccionar páginas reales de
+  bbva.com.co durante el desarrollo. Es un heurístico: puede necesitar ajuste fino una vez se
+  procese el corpus completo real.
+- `run_cleaner.py`: script orquestador (CLI). Lee `data/raw/manifest.json`, limpia cada página
+  descargada con éxito y guarda un JSON por página en `data/processed/<slug>.json` con
+  `url`, `sección`, `title`, `fetched_at` y `text`. Páginas cuyo texto limpio quede por debajo
+  de `CLEANING_MIN_TEXT_LENGTH` (ruido/errores de parseo) se descartan.
+
+### Cómo ejecutar la limpieza
+
+```bash
+python -m cleaning.run_cleaner
+```
+
+### Verificación
+
+La lógica de limpieza se probó contra un fixture HTML sintético (con banner de cookies, nav,
+footer y contenido real de ejemplo) que replica la estructura observada en bbva.com.co,
+confirmando que el texto final queda libre de boilerplate. No se incluye como parte del
+repositorio por no ser dato real — la verificación end-to-end con el corpus real está
+pendiente de que se complete la Fase 2 (ver limitación arriba).
