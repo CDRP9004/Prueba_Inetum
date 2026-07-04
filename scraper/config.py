@@ -15,11 +15,11 @@ def _get_list(key: str, default: str) -> list[str]:
 
 @dataclass(frozen=True)
 class ScraperConfig:
-    base_url: str = os.getenv("SCRAPER_BASE_URL", "https://www.bbva.com.co")
-    sitemap_url: str = os.getenv("SCRAPER_SITEMAP_URL", "https://www.bbva.com.co/sitemap.xml")
+    base_url: str = os.getenv("SCRAPER_BASE_URL", "https://www.bbva.mx")
+    sitemap_url: str = os.getenv("SCRAPER_SITEMAP_URL", "https://www.bbva.mx/sitemap.xml")
     sections: list[str] = field(default_factory=lambda: _get_list("SCRAPER_SECTIONS", "/personas/,/empresas/"))
     max_pages: int = int(os.getenv("SCRAPER_MAX_PAGES", "150"))
-    delay_seconds: float = float(os.getenv("SCRAPER_DELAY_SECONDS", "0.5"))
+    delay_seconds: float = float(os.getenv("SCRAPER_DELAY_SECONDS", "1.0"))
     timeout_seconds: int = int(os.getenv("SCRAPER_TIMEOUT_SECONDS", "15"))
     user_agent: str = os.getenv(
         "SCRAPER_USER_AGENT",
