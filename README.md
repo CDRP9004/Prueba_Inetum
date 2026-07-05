@@ -12,8 +12,8 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 1 — Estructura base del repositorio
 - [x] Fase 2 — Web scraping (149/150 páginas reales descargadas de bbva.mx, ver decisión abajo)
 - [x] Fase 3 — Limpieza y normalización de datos (146 páginas limpias en `data/processed/`)
-- [ ] Fase 4 — Chunking, embeddings e indexación vectorial
-- [ ] Fase 5 — Pipeline RAG base
+- [x] Fase 4 — Chunking, embeddings e indexación vectorial (870 chunks en ChromaDB)
+- [x] Fase 5 — Pipeline RAG base (retrieval + Ollama, probado por CLI)
 - [ ] Fase 6 — API de chat (FastAPI)
 - [ ] Fase 7 — Historial de conversación persistente
 - [ ] Fase 8 — Interfaz web mínima
@@ -165,3 +165,73 @@ texto tras la limpieza (páginas de organigrama/video/widget de tipo de cambio, 
 el contenido en imágenes — correctamente descartadas por no aportar texto indexable), y
 **1 omitida** por el error de descarga (404) de la Fase 2. Se verificó manualmente que no
 queda boilerplate residual (cookies, nav, menú) en el texto limpio.
+
+## Fase 4 — Chunking, embeddings e indexación vectorial
+
+Módulo `indexing/`:
+
+- `config.py`: tamaño/solape de chunk, modelo de embeddings, directorio y nombre de la
+  colección de Chroma (todo configurable vía `.env`).
+- `chunker.py`: divide el texto limpio de cada página en chunks de hasta `CHUNK_SIZE`
+  caracteres con `CHUNK_OVERLAP` de solape, respetando límites de párrafo cuando es posible
+  (evita cortar frases a la mitad salvo que un párrafo individual sea más largo que el chunk).
+- `embeddings.py`: **Factory Method** (`build_embedder`) que construye el modelo de
+  embeddings a partir de su nombre. Usa `intfloat/multilingual-e5-small`
+  (sentence-transformers): multilingüe, corre en CPU, gratuito/self-hosted, y su convención
+  de prefijos `query: ` / `passage: ` mejora la calidad del retrieval. El resto del código
+  depende solo de la interfaz `Embedder`, no de la librería concreta.
+- `vector_store.py`: cliente de **ChromaDB** en modo `PersistentClient` (embebido, sin
+  servidor aparte) para desarrollo local; en la Fase 12 se cambia a `HttpClient` apuntando al
+  contenedor de Chroma en docker-compose, sin tocar el resto del pipeline.
+- `run_indexer.py`: script orquestador (CLI). Lee `data/processed/*.json`, chunkea, calcula
+  embeddings en lotes y sube todo a la colección de Chroma. Cada corrida reconstruye la
+  colección desde cero (simple y determinístico para el alcance de esta prueba).
+
+### Cómo ejecutar la indexación
+
+```bash
+python -m indexing.run_indexer
+```
+
+### Resultado de la corrida
+
+**146 documentos → 870 chunks indexados** en la colección `bbva_docs` de ChromaDB
+(persistida en `data/chroma/`).
+
+## Fase 5 — Pipeline RAG base
+
+Módulo `rag/`:
+
+- `config.py`: host de Ollama, modelo, temperatura, `top_k` de retrieval (vía `.env`).
+- `retriever.py`: **Strategy** — `Retriever` es la interfaz que usa el pipeline;
+  `DenseRetriever` es la primera implementación (búsqueda vectorial pura contra Chroma). La
+  Fase 9 añadirá `HybridRetriever` (dense + BM25 + RRF) implementando la misma interfaz, sin
+  cambiar el pipeline.
+- `llm.py`: `OllamaClient`, cliente HTTP mínimo contra `POST /api/chat` del servidor local de
+  Ollama (`llama3.2:3b` por defecto — pequeño, corre razonablemente en CPU).
+- `prompt.py`: arma el prompt de sistema (instruye a responder solo con el contexto y admitir
+  cuando no lo tiene) y el prompt de usuario (contexto recuperado + historial de conversación
+  + pregunta). El parámetro `history` ya está soportado aquí para que la Fase 7 solo tenga que
+  pasar los mensajes previos, sin modificar esta función.
+- `pipeline.py`: **Chain of Responsibility** — `RAGPipeline` ejecuta una lista ordenada de
+  `PipelineStep` (`RetrievalStep` → `GenerationStep`) sobre un `RAGContext` compartido. La
+  Fase 9 inserta un paso de rerank entre ambos agregando un step a la lista, sin modificar
+  `RAGPipeline` ni los steps existentes.
+- `cli.py`: CLI de prueba manual (`python -m rag.cli "pregunta"`) para validar retrieval +
+  generación antes de exponerlos vía FastAPI en la Fase 6.
+
+### Cómo probar el pipeline
+
+```bash
+ollama serve &                      # si no está corriendo ya
+ollama pull llama3.2:3b
+python -m rag.cli "¿Qué tarjetas de crédito ofrece BBVA?"
+```
+
+### Resultado de la prueba
+
+El pipeline retorna respuestas y cita las fuentes (título + URL) usadas. Con el corpus actual
+(150 páginas de `/personas/` y `/empresas/`, sin una sección específica de catálogo de
+tarjetas), el modelo reconoce honestamente cuando el contexto recuperado no tiene el detalle
+exacto pedido, en vez de inventar información — el comportamiento esperado dado el prompt de
+sistema. Ampliar `SCRAPER_MAX_PAGES`/secciones mejoraría la cobertura temática.
