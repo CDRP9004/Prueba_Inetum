@@ -16,7 +16,7 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 5 — Pipeline RAG base (retrieval + Ollama, probado por CLI)
 - [x] Fase 6 — API de chat (FastAPI, probada en vivo con `POST /chat`)
 - [x] Fase 7 — Historial de conversación persistente (SQLite, ventana N configurable)
-- [ ] Fase 8 — Interfaz web mínima
+- [x] Fase 8 — Interfaz web mínima (chat servido por FastAPI en `/`)
 - [ ] Fase 9 — Retrieval híbrido (dense + BM25) y MMR
 - [ ] Fase 10 — Reranker
 - [ ] Fase 11 — Observabilidad con Langfuse
@@ -297,3 +297,21 @@ primero ("¿y a través de qué segmentos se distribuye **eso que mencionaste**?
 respuesta entiende correctamente la referencia y retoma el dato de la respuesta anterior,
 confirmando que el historial efectivamente entra al contexto del LLM. `GET /history/<id>`
 devuelve los 4 mensajes (2 turnos) en orden cronológico.
+
+## Fase 8 — Interfaz web mínima
+
+`app/static/index.html`: página única, autocontenida (HTML + CSS + JS inline, sin
+frameworks ni build step), servida directamente por FastAPI en `GET /`. Funcionalidad:
+
+- `session_id` generado con `crypto.randomUUID()` y persistido en `localStorage`, así que
+  recargar la página mantiene la misma sesión (y su historial).
+- Al cargar, trae el historial previo de la sesión vía `GET /history/{session_id}` y lo
+  pinta antes de aceptar mensajes nuevos.
+- Cada respuesta muestra sus fuentes (título + link) debajo del mensaje del asistente.
+- Errores de la API (503 si Ollama no responde, etc.) se muestran como un mensaje de error
+  en el propio chat en vez de fallar silenciosamente.
+
+### Cómo usarla
+
+Con la API corriendo (ver Fase 6), abrir `http://localhost:8000/` en el navegador y escribir
+preguntas sobre productos/servicios de BBVA México directamente en el chat.
