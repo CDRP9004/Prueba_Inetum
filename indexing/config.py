@@ -14,8 +14,13 @@ class IndexingConfig:
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "1000"))
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "150"))
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
-    chroma_persist_dir: Path = field(default_factory=lambda: Path(os.getenv("CHROMA_PERSIST_DIR", "data/chroma")))
     chroma_collection: str = os.getenv("CHROMA_COLLECTION", "bbva_docs")
+
+    # "persistent" (embebido, para desarrollo local) o "http" (contenedor propio, Fase 12)
+    chroma_mode: str = os.getenv("CHROMA_MODE", "persistent")
+    chroma_persist_dir: Path = field(default_factory=lambda: Path(os.getenv("CHROMA_PERSIST_DIR", "data/chroma")))
+    chroma_host: str = os.getenv("CHROMA_HOST", "localhost")
+    chroma_port: int = int(os.getenv("CHROMA_PORT", "8000"))
 
 
 config = IndexingConfig()

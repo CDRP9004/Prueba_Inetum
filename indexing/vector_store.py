@@ -1,8 +1,13 @@
-"""Cliente de la base de datos vectorial (ChromaDB), en modo persistente local.
+"""Cliente de la base de datos vectorial (ChromaDB).
 
-Se usa `PersistentClient` (embebido, sin servidor aparte) para desarrollo; en la Fase 12
-(dockerización) se podrá pasar a `HttpClient` apuntando a un contenedor de Chroma sin tocar
-el resto del código, ya que todo el acceso pasa por `get_collection()`.
+Soporta dos modos, elegidos por `CHROMA_MODE`:
+
+- `persistent` (por defecto, desarrollo local): `PersistentClient` embebido, sin servidor
+  aparte, con los datos en `data/chroma/`.
+- `http` (Fase 12, docker-compose): `HttpClient` contra el contenedor propio de Chroma.
+
+El resto del código (retrievers, indexador) solo llama a `get_collection()` y no sabe en
+qué modo está corriendo.
 """
 from __future__ import annotations
 
@@ -16,6 +21,9 @@ from indexing.config import config
 
 @lru_cache(maxsize=1)
 def _client() -> chromadb.ClientAPI:
+    if config.chroma_mode == "http":
+        return chromadb.HttpClient(host=config.chroma_host, port=config.chroma_port)
+
     config.chroma_persist_dir.mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(path=str(config.chroma_persist_dir))
 

@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.env
+data/raw/*
+data/processed/*
+data/chroma/*
+data/history.db
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/chroma/.gitkeep

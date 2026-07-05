@@ -20,7 +20,7 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 9 — Retrieval híbrido (dense + BM25 + RRF) y MMR
 - [x] Fase 10 — Reranker (cross-encoder multilingüe)
 - [x] Fase 11 — Observabilidad con Langfuse (implementada; sin cuenta propia para verificar trazas en vivo, ver limitación)
-- [ ] Fase 12 — Dockerización completa
+- [x] Fase 12 — Dockerización completa (probado de punta a punta, stack real corriendo en contenedores)
 - [ ] Fase 13 — Evaluación con RAGAS
 - [ ] Fase 14 — Analítica del histórico de conversaciones
 - [ ] Fase 15 — Manejo de errores y endurecimiento
@@ -411,3 +411,73 @@ dashboard. Lo que sí verifiqué explícitamente:
    trazas efectivamente aparezcan bien formadas en un dashboard real** con credenciales
    válidas. Si al conectar una cuenta real algo no calza (nombres de campos, jerarquía de
    spans), es el punto más probable de ajuste.
+
+## Fase 12 — Dockerización completa
+
+### Servicios (`docker-compose.yml`)
+
+| Servicio | Imagen | Rol |
+|---|---|---|
+| `chromadb` | `chromadb/chroma:latest` | Base de datos vectorial, modo servidor (puerto interno 8000, expuesto en `8001` del host) |
+| `ollama` | `ollama/ollama:latest` | Sirve el LLM local (puerto `11434`) |
+| `ollama-init` | `ollama/ollama:latest` | Contenedor *one-shot*: baja el modelo (`ollama pull`) en el volumen de Ollama y termina |
+| `app` | build local (`Dockerfile`) | FastAPI + pipeline RAG completo |
+| `ingest` | build local (`Dockerfile`), perfil `ingest` | Pipeline de datos (scraper → cleaner → indexer), a demanda |
+
+`indexing/vector_store.py` soporta modo `persistent` (embebido, desarrollo local) o `http`
+(contra el contenedor de Chroma) vía `CHROMA_MODE`; `docker-compose.yml` fija `CHROMA_MODE=http`
+para el servicio `app`, sin tocar código.
+
+### Por qué la ingesta de datos no se auto-ejecuta en cada `up`
+
+El scraping depende de acceso a internet a un sitio externo (con el WAF adaptativo que ya
+documentamos en la Fase 2) y tarda varios minutos; no tiene sentido dispararlo automáticamente
+cada vez que se levanta el stack. Por eso `ingest` es un servicio separado, con su propio
+*profile* de Docker Compose, que se corre **una vez** (o cuando se quiera actualizar el
+corpus) y no como parte de `docker compose up`.
+
+### Instrucciones paso a paso (desde cero)
+
+```bash
+# 1. Clonar y configurar
+git clone <url-del-repo> && cd Prueba_Inetum
+cp .env.example .env   # ajustar valores si hace falta (modelo, chunk size, N mensajes, etc.)
+
+# 2. Levantar la infraestructura (Chroma + Ollama) y esperar a que estén healthy
+docker compose up -d chromadb ollama
+
+# 3. Bajar el modelo de LLM dentro del volumen de Ollama (una sola vez)
+docker compose up ollama-init   # corre y termina solo; revisa que loguee "success"
+
+# 4. Poblar los datos: scraping + limpieza + indexación (una sola vez, o cuando se
+#    quiera refrescar el corpus)
+docker compose --profile ingest run --rm ingest
+
+# 5. Levantar la app
+docker compose up -d app
+
+# 6. Usar la interfaz conversacional
+# Abrir http://localhost:8000/ en el navegador, o probar directo:
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "demo", "message": "¿Qué es la Casa de Bolsa de BBVA?"}'
+```
+
+Para arrancadas posteriores (con los datos ya indexados y el modelo ya descargado, ambos
+persistidos en volúmenes de Docker), alcanza con:
+
+```bash
+docker compose up -d
+```
+
+### Verificado en este entorno
+
+Se corrió el stack completo de punta a punta: `chromadb` y `ollama` healthy, `ollama-init`
+descargó `llama3.2:3b` (2 GB) dentro del volumen Docker, `ingest` indexó los 146 documentos
+reales (870 chunks) contra el Chroma dockerizado vía HTTP, y `POST /chat` respondió
+correctamente contra el stack 100% containerizado (misma respuesta y fuentes que en
+desarrollo local). También se verificaron `GET /` (interfaz web) y `GET /history/{id}`.
+
+**Nota técnica:** la imagen oficial de `chromadb/chroma` no incluye `curl` ni `wget`, así que
+su healthcheck usa `bash -c '</dev/tcp/localhost/8000'` (chequeo TCP) en vez del patrón
+`curl -f http://...` más común.

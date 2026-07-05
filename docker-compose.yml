@@ -1,0 +1,82 @@
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    healthcheck:
+      # La imagen oficial de Chroma no trae curl/wget; se valida con un chequeo TCP simple.
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8000' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Servicio "one-shot": descarga el modelo de LLM en el volumen de ollama y termina.
+  ollama-init:
+    image: ollama/ollama:latest
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["ollama", "pull", "${LLM_MODEL:-llama3.2:3b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - CHROMA_MODE=http
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+      - OLLAMA_HOST=http://ollama:11434
+      - HISTORY_DB_PATH=/app/data/history.db
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Pipeline de datos (scraping -> limpieza -> indexación). No es parte del stack que sirve
+  # tráfico; se corre a demanda con `docker compose --profile ingest run --rm ingest` para
+  # poblar/actualizar los datos (ver README, sección Fase 12).
+  ingest:
+    build: .
+    profiles: ["ingest"]
+    env_file:
+      - .env
+    environment:
+      - CHROMA_MODE=http
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8000
+    volumes:
+      - ./data:/app/data
+    command: >
+      sh -c "python -m scraper.run_scraper &&
+             python -m cleaning.run_cleaner &&
+             python -m indexing.run_indexer"
+    depends_on:
+      chromadb:
+        condition: service_healthy
+
+volumes:
+  chroma_data:
+  ollama_data:
