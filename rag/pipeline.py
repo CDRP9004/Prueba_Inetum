@@ -1,10 +1,9 @@
 """Orquestación del pipeline RAG.
 
 Patrón Chain of Responsibility: `RAGPipeline` ejecuta una lista ordenada de `PipelineStep`
-sobre un `RAGContext` compartido, cada uno mutándolo (retrieval -> generación). La Fase 9
-inserta un paso de rerank entre ambos (y Fase 9/10 pueden agregar reescritura de query,
-MMR, etc.) sin tocar `RAGPipeline` ni los steps existentes: solo se añade un nuevo step a
-la lista.
+sobre un `RAGContext` compartido, cada uno mutándolo (retrieval -> rerank opcional ->
+generación). La Fase 10 inserta `RerankStep` entre retrieval y generación sin tocar
+`RAGPipeline` ni los steps existentes: solo se agrega un step más a la lista.
 """
 from __future__ import annotations
 
@@ -58,7 +57,34 @@ class RAGPipeline:
         return context
 
 
+def _build_retriever(config: RagConfig, embedder) -> Retriever:
+    if not config.use_hybrid_search:
+        return DenseRetriever(embedder)
+
+    from rag.hybrid_retriever import HybridRetriever, build_bm25_index
+
+    return HybridRetriever(
+        embedder,
+        build_bm25_index(),
+        rrf_k=config.rrf_k,
+        mmr_lambda=config.mmr_lambda,
+        candidate_multiplier=config.retrieval_candidate_multiplier,
+    )
+
+
 def build_default_pipeline(config: RagConfig, embedder) -> RAGPipeline:
-    retriever = DenseRetriever(embedder)
+    retriever = _build_retriever(config, embedder)
     llm_client = OllamaClient(config)
-    return RAGPipeline([RetrievalStep(retriever, config.top_k), GenerationStep(llm_client)])
+    steps: list[PipelineStep] = []
+
+    if config.use_reranker:
+        from rag.reranker import RerankStep, build_cross_encoder
+
+        retrieval_k = max(config.top_k * config.rerank_candidate_multiplier, config.top_k)
+        steps.append(RetrievalStep(retriever, retrieval_k))
+        steps.append(RerankStep(build_cross_encoder(config.reranker_model), top_k=config.top_k))
+    else:
+        steps.append(RetrievalStep(retriever, config.top_k))
+
+    steps.append(GenerationStep(llm_client))
+    return RAGPipeline(steps)
