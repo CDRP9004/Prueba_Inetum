@@ -4,11 +4,13 @@ __pycache__/
 venv/
 .env
 
-# Datos scrapeados (se generan con el scraper, no se versionan)
+# Datos scrapeados / procesados / indexados (se generan con el pipeline, no se versionan)
 data/raw/*
 data/processed/*
+data/chroma/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/chroma/.gitkeep
 
 # Modelos / caches locales
 .cache/
