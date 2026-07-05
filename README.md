@@ -14,7 +14,7 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 3 — Limpieza y normalización de datos (146 páginas limpias en `data/processed/`)
 - [x] Fase 4 — Chunking, embeddings e indexación vectorial (870 chunks en ChromaDB)
 - [x] Fase 5 — Pipeline RAG base (retrieval + Ollama, probado por CLI)
-- [ ] Fase 6 — API de chat (FastAPI)
+- [x] Fase 6 — API de chat (FastAPI, probada en vivo con `POST /chat`)
 - [ ] Fase 7 — Historial de conversación persistente
 - [ ] Fase 8 — Interfaz web mínima
 - [ ] Fase 9 — Retrieval híbrido (dense + BM25) y MMR
@@ -235,3 +235,38 @@ El pipeline retorna respuestas y cita las fuentes (título + URL) usadas. Con el
 tarjetas), el modelo reconoce honestamente cuando el contexto recuperado no tiene el detalle
 exacto pedido, en vez de inventar información — el comportamiento esperado dado el prompt de
 sistema. Ampliar `SCRAPER_MAX_PAGES`/secciones mejoraría la cobertura temática.
+
+## Fase 6 — API de chat (FastAPI)
+
+Módulo `app/`:
+
+- `schemas.py`: modelos Pydantic de request/response (`ChatRequest`, `ChatResponse`,
+  `SourceItem`).
+- `dependencies.py`: **Singleton** vía `lru_cache` — el embedder y el pipeline RAG cargan un
+  modelo pesado en memoria, así que se construyen una única vez por proceso y se reutilizan
+  en cada request (en vez de recrearse por petición).
+- `routers/chat.py`: `POST /chat` — recibe `{session_id, message}`, corre el pipeline RAG y
+  devuelve `{answer, sources}`. Incluye manejo de errores: `422` si el mensaje viene vacío,
+  `503` si Ollama no responde, `500` para cualquier otro error inesperado (con logging).
+- `main.py`: arma la app FastAPI, incluye el router de chat y expone `GET /health`.
+
+`session_id` ya viaja en el request desde esta fase para no tener que romper el contrato de
+la API en la Fase 7 (que lo empieza a usar de verdad para persistir/recuperar historial).
+
+### Cómo levantar la API
+
+```bash
+ollama serve &                          # si no está corriendo
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+### Prueba en vivo
+
+```bash
+curl -s -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "test-1", "message": "¿Qué es la banca patrimonial y privada de BBVA?"}'
+```
+
+Responde con una respuesta correcta y bien fundamentada en las fuentes reales indexadas
+(verificado manualmente contra el corpus de bbva.mx).
