@@ -1,10 +1,11 @@
 """Aplicación FastAPI: uso -> uvicorn app.main:app --reload"""
 from fastapi import FastAPI
 
-from app.routers import chat
+from app.routers import chat, history
 
 app = FastAPI(title="Asistente RAG BBVA", version="0.1.0")
 app.include_router(chat.router)
+app.include_router(history.router)
 
 
 @app.get("/health")

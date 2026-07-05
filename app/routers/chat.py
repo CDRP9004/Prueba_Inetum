@@ -6,8 +6,10 @@ import logging
 import requests
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.dependencies import get_pipeline
+from app.dependencies import get_pipeline, get_repository
 from app.schemas import ChatRequest, ChatResponse, SourceItem
+from history.config import config as history_config
+from history.repository import ConversationRepository
 from rag.pipeline import RAGPipeline
 
 logger = logging.getLogger(__name__)
@@ -15,12 +17,18 @@ router = APIRouter()
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest, pipeline: RAGPipeline = Depends(get_pipeline)) -> ChatResponse:
+def chat(
+    request: ChatRequest,
+    pipeline: RAGPipeline = Depends(get_pipeline),
+    repository: ConversationRepository = Depends(get_repository),
+) -> ChatResponse:
     if not request.message.strip():
         raise HTTPException(status_code=422, detail="El mensaje no puede estar vacío.")
 
+    history = repository.get_recent_messages(request.session_id, history_config.window_n)
+
     try:
-        result = pipeline.run(request.message)
+        result = pipeline.run(request.message, history=history)
     except requests.exceptions.RequestException:
         logger.exception("No se pudo contactar al servidor de Ollama")
         raise HTTPException(
@@ -31,6 +39,9 @@ def chat(request: ChatRequest, pipeline: RAGPipeline = Depends(get_pipeline)) ->
     except Exception:
         logger.exception("Error inesperado en el pipeline RAG")
         raise HTTPException(status_code=500, detail="Ocurrió un error procesando la pregunta.")
+
+    repository.add_message(request.session_id, "user", request.message)
+    repository.add_message(request.session_id, "assistant", result.answer)
 
     return ChatResponse(
         answer=result.answer,

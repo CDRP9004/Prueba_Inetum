@@ -15,7 +15,7 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 4 — Chunking, embeddings e indexación vectorial (870 chunks en ChromaDB)
 - [x] Fase 5 — Pipeline RAG base (retrieval + Ollama, probado por CLI)
 - [x] Fase 6 — API de chat (FastAPI, probada en vivo con `POST /chat`)
-- [ ] Fase 7 — Historial de conversación persistente
+- [x] Fase 7 — Historial de conversación persistente (SQLite, ventana N configurable)
 - [ ] Fase 8 — Interfaz web mínima
 - [ ] Fase 9 — Retrieval híbrido (dense + BM25) y MMR
 - [ ] Fase 10 — Reranker
@@ -270,3 +270,30 @@ curl -s -X POST http://localhost:8000/chat \
 
 Responde con una respuesta correcta y bien fundamentada en las fuentes reales indexadas
 (verificado manualmente contra el corpus de bbva.mx).
+
+## Fase 7 — Historial de conversación persistente
+
+Módulo `history/`:
+
+- `config.py`: ruta de la base SQLite y `HISTORY_WINDOW_N` (mensajes previos usados como
+  contexto), ambos configurables vía `.env`.
+- `models.py`: modelo ORM `Message` (SQLAlchemy) — `session_id`, `role`, `content`,
+  `created_at`.
+- `db.py`: engine + fábrica de sesiones; crea las tablas al importarse si no existen.
+- `repository.py`: **Repository** — `ConversationRepository` es la única puerta de entrada a
+  los datos de conversación para el resto de la app (`add_message`, `get_recent_messages`,
+  `get_all_messages`). Cambiar el motor de persistencia (ej. a Postgres) es un cambio
+  contenido a este módulo.
+
+`app/routers/chat.py` ahora, en cada request: 1) obtiene los últimos `HISTORY_WINDOW_N`
+mensajes de la sesión antes de llamar al pipeline (se pasan como `history` al prompt), y 2)
+guarda tanto la pregunta como la respuesta al terminar. `app/routers/history.py` expone
+`GET /history/{session_id}` para inspeccionar la conversación completa de una sesión.
+
+### Prueba en vivo
+
+Dos mensajes seguidos en la misma sesión, el segundo con una referencia pronominal al
+primero ("¿y a través de qué segmentos se distribuye **eso que mencionaste**?"): la
+respuesta entiende correctamente la referencia y retoma el dato de la respuesta anterior,
+confirmando que el historial efectivamente entra al contexto del LLM. `GET /history/<id>`
+devuelve los 4 mensajes (2 turnos) en orden cronológico.
