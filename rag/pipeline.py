@@ -4,6 +4,10 @@ Patrón Chain of Responsibility: `RAGPipeline` ejecuta una lista ordenada de `Pi
 sobre un `RAGContext` compartido, cada uno mutándolo (retrieval -> rerank opcional ->
 generación). La Fase 10 inserta `RerankStep` entre retrieval y generación sin tocar
 `RAGPipeline` ni los steps existentes: solo se agrega un step más a la lista.
+
+La Fase 11 envuelve cada step con `TracedStep` (patrón Decorator, ver
+`observability/traced_step.py`) para emitir observabilidad a Langfuse sin que
+`RetrievalStep`/`RerankStep`/`GenerationStep` sepan que existe Langfuse.
 """
 from __future__ import annotations
 
@@ -73,6 +77,8 @@ def _build_retriever(config: RagConfig, embedder) -> Retriever:
 
 
 def build_default_pipeline(config: RagConfig, embedder) -> RAGPipeline:
+    from observability.traced_step import TracedStep
+
     retriever = _build_retriever(config, embedder)
     llm_client = OllamaClient(config)
     steps: list[PipelineStep] = []
@@ -81,10 +87,12 @@ def build_default_pipeline(config: RagConfig, embedder) -> RAGPipeline:
         from rag.reranker import RerankStep, build_cross_encoder
 
         retrieval_k = max(config.top_k * config.rerank_candidate_multiplier, config.top_k)
-        steps.append(RetrievalStep(retriever, retrieval_k))
-        steps.append(RerankStep(build_cross_encoder(config.reranker_model), top_k=config.top_k))
+        steps.append(TracedStep(RetrievalStep(retriever, retrieval_k), name="retrieval", as_type="retriever"))
+        steps.append(
+            TracedStep(RerankStep(build_cross_encoder(config.reranker_model), top_k=config.top_k), name="rerank")
+        )
     else:
-        steps.append(RetrievalStep(retriever, config.top_k))
+        steps.append(TracedStep(RetrievalStep(retriever, config.top_k), name="retrieval", as_type="retriever"))
 
-    steps.append(GenerationStep(llm_client))
+    steps.append(TracedStep(GenerationStep(llm_client), name="generation", as_type="generation"))
     return RAGPipeline(steps)

@@ -19,7 +19,7 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 8 — Interfaz web mínima (chat servido por FastAPI en `/`)
 - [x] Fase 9 — Retrieval híbrido (dense + BM25 + RRF) y MMR
 - [x] Fase 10 — Reranker (cross-encoder multilingüe)
-- [ ] Fase 11 — Observabilidad con Langfuse
+- [x] Fase 11 — Observabilidad con Langfuse (implementada; sin cuenta propia para verificar trazas en vivo, ver limitación)
 - [ ] Fase 12 — Dockerización completa
 - [ ] Fase 13 — Evaluación con RAGAS
 - [ ] Fase 14 — Analítica del histórico de conversaciones
@@ -367,3 +367,47 @@ Probado en aislado: para la pregunta "¿qué tarjetas de crédito ofrece BBVA?",
 cross-encoder puntuó un chunk relevante sobre tarjetas con **10.8** y uno irrelevante (aviso
 de privacidad) con **-4.4** — discriminación clara. Verificado también de punta a punta vía
 `POST /chat` con retrieval híbrido + MMR + reranker + generación, todos activos por defecto.
+
+## Fase 11 — Observabilidad con Langfuse
+
+Módulo `observability/`:
+
+- `config.py`: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` (por defecto
+  `https://cloud.langfuse.com`, el tier gratuito).
+- `langfuse_client.py`: construye el cliente y valida credenciales (`auth_check()`) una sola
+  vez (cacheado). **Degradación elegante por diseño:** si faltan las keys, o son inválidas,
+  o Langfuse no responde, el resto de la app sigue funcionando exactamente igual — solo que
+  sin enviar trazas. La observabilidad nunca debe poder tumbar el chat.
+- `traced_step.py`: **Decorator** (estructural) — `TracedStep` envuelve cualquier
+  `PipelineStep` (retrieval, rerank, generación) agregándole una observación de Langfuse
+  (`span`/`retriever`/`generation` según corresponda) alrededor de su ejecución, sin que
+  `RetrievalStep`/`RerankStep`/`GenerationStep` sepan que Langfuse existe. `rag/pipeline.py`
+  envuelve cada step con `TracedStep` al construir el pipeline.
+- `tracing.py`: `traced_chat_request` abre una traza por request en `app/routers/chat.py`,
+  usando `propagate_attributes(session_id=...)` del SDK para que las observaciones de los
+  steps (hijas, vía OpenTelemetry) queden agrupadas bajo la misma sesión — así se puede ver
+  en Langfuse la traza completa de una conversación, no solo de un mensaje suelto.
+
+### Cómo activarlo
+
+1. Crear una cuenta gratuita en [Langfuse Cloud](https://cloud.langfuse.com) (tier free).
+2. Copiar las API keys del proyecto a `.env`: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`.
+3. Listo — cada request a `/chat` va a generar una traza con sus observaciones de retrieval,
+   rerank y generación agrupadas por `session_id`.
+
+### Limitación honesta
+
+No dispongo de una cuenta de Langfuse propia para verificar visualmente las trazas en el
+dashboard. Lo que sí verifiqué explícitamente:
+
+1. **Camino sin configurar** (el estado real de este repo): sin keys, `get_langfuse_client()`
+   devuelve `None` y toda la instrumentación se vuelve un no-op transparente — probado con
+   `python -m rag.cli` y con `POST /chat`, funcionan idénticamente a antes de la Fase 11.
+2. **Camino con keys inválidas** (simulando un typo del usuario): `auth_check()` lanza
+   `UnauthorizedError`, capturado por `get_langfuse_client()`, logueado, y la respuesta del
+   chat se generó con normalidad (mismo resultado que sin keys).
+3. La integración sigue la API pública documentada del SDK v3 de Langfuse
+   (`start_as_current_observation`, `propagate_attributes`), pero **no pude confirmar que las
+   trazas efectivamente aparezcan bien formadas en un dashboard real** con credenciales
+   válidas. Si al conectar una cuenta real algo no calza (nombres de campos, jerarquía de
+   spans), es el punto más probable de ajuste.

@@ -10,6 +10,7 @@ from app.dependencies import get_pipeline, get_repository
 from app.schemas import ChatRequest, ChatResponse, SourceItem
 from history.config import config as history_config
 from history.repository import ConversationRepository
+from observability.tracing import traced_chat_request
 from rag.pipeline import RAGPipeline
 
 logger = logging.getLogger(__name__)
@@ -27,18 +28,22 @@ def chat(
 
     history = repository.get_recent_messages(request.session_id, history_config.window_n)
 
-    try:
-        result = pipeline.run(request.message, history=history)
-    except requests.exceptions.RequestException:
-        logger.exception("No se pudo contactar al servidor de Ollama")
-        raise HTTPException(
-            status_code=503,
-            detail="El modelo de lenguaje no está disponible en este momento. "
-            "Verificá que Ollama esté corriendo.",
-        )
-    except Exception:
-        logger.exception("Error inesperado en el pipeline RAG")
-        raise HTTPException(status_code=500, detail="Ocurrió un error procesando la pregunta.")
+    with traced_chat_request(request.session_id, request.message) as root_observation:
+        try:
+            result = pipeline.run(request.message, history=history)
+        except requests.exceptions.RequestException:
+            logger.exception("No se pudo contactar al servidor de Ollama")
+            raise HTTPException(
+                status_code=503,
+                detail="El modelo de lenguaje no está disponible en este momento. "
+                "Verificá que Ollama esté corriendo.",
+            )
+        except Exception:
+            logger.exception("Error inesperado en el pipeline RAG")
+            raise HTTPException(status_code=500, detail="Ocurrió un error procesando la pregunta.")
+
+        if root_observation is not None:
+            root_observation.update(output={"answer": result.answer})
 
     repository.add_message(request.session_id, "user", request.message)
     repository.add_message(request.session_id, "assistant", result.answer)
