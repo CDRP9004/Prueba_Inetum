@@ -17,8 +17,8 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 6 — API de chat (FastAPI, probada en vivo con `POST /chat`)
 - [x] Fase 7 — Historial de conversación persistente (SQLite, ventana N configurable)
 - [x] Fase 8 — Interfaz web mínima (chat servido por FastAPI en `/`)
-- [ ] Fase 9 — Retrieval híbrido (dense + BM25) y MMR
-- [ ] Fase 10 — Reranker
+- [x] Fase 9 — Retrieval híbrido (dense + BM25 + RRF) y MMR
+- [x] Fase 10 — Reranker (cross-encoder multilingüe)
 - [ ] Fase 11 — Observabilidad con Langfuse
 - [ ] Fase 12 — Dockerización completa
 - [ ] Fase 13 — Evaluación con RAGAS
@@ -315,3 +315,55 @@ frameworks ni build step), servida directamente por FastAPI en `GET /`. Funciona
 
 Con la API corriendo (ver Fase 6), abrir `http://localhost:8000/` en el navegador y escribir
 preguntas sobre productos/servicios de BBVA México directamente en el chat.
+
+## Fase 9 — Retrieval híbrido (dense + BM25) y MMR
+
+`rag/hybrid_retriever.py`:
+
+- `BM25Index`: índice BM25 (`rank_bm25`) construido en memoria a partir de todos los chunks
+  de la colección de Chroma (tokenización simple por regex + minúsculas). Aporta recall
+  léxico (nombres exactos de productos, siglas) que el embedding a veces diluye.
+- `HybridRetriever` (implementa `Retriever`, Strategy): combina el ranking denso (Chroma) y
+  el ranking BM25 mediante **Reciprocal Rank Fusion** (`RRF_K`, constante estándar 60), que
+  fusiona ambos sin necesitar normalizar escalas de score no comparables entre sí.
+- Sobre los candidatos fusionados se aplica **MMR** (Maximal Marginal Relevance):
+  selecciona iterativamente el siguiente chunk que maximice `MMR_LAMBDA * relevancia -
+  (1 - MMR_LAMBDA) * similitud con lo ya elegido`, para no devolver varios chunks casi
+  idénticos de una misma página.
+- Activable/desactivable con `USE_HYBRID_SEARCH` (si es `false`, se usa `DenseRetriever` de
+  la Fase 5). La selección ocurre en `rag/pipeline.py::_build_retriever`, sin tocar
+  `RAGPipeline`.
+
+**Nota sobre el campo `score` en las fuentes:** con MMR activo, el orden de salida ya no es
+estrictamente monótono por score (por diseño: MMR sacrifica algo de relevancia pura por
+diversidad). El primer resultado sigue siendo el más relevante; los siguientes balancean
+relevancia y diversidad.
+
+### Cómo probarlo
+
+```bash
+python -m rag.cli "¿Qué es la banca patrimonial y privada de BBVA?"
+```
+
+## Fase 10 — Reranker
+
+`rag/reranker.py`:
+
+- `RerankStep` (implementa `PipelineStep`, Chain of Responsibility): reordena con un
+  **cross-encoder** (`cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`, multilingüe vía mMARCO,
+  liviano para CPU) los candidatos recuperados, evaluando el par (pregunta, chunk) de forma
+  conjunta — mucho más preciso que comparar embeddings por separado, a costa de ser más
+  lento, por lo que solo se aplica sobre un conjunto acotado de candidatos.
+- Cuando `USE_RERANKER=true`, `build_default_pipeline` pide `top_k *
+  RERANK_CANDIDATE_MULTIPLIER` candidatos en la etapa de retrieval y el reranker los recorta
+  de vuelta a `top_k` antes de generar la respuesta. El `score` final de cada fuente pasa a
+  ser el score del cross-encoder (reemplaza al de RRF/dense).
+- Se inserta entre `RetrievalStep` y `GenerationStep` en la cadena de `rag/pipeline.py` sin
+  modificar ninguno de los dos.
+
+### Resultado verificado
+
+Probado en aislado: para la pregunta "¿qué tarjetas de crédito ofrece BBVA?", el
+cross-encoder puntuó un chunk relevante sobre tarjetas con **10.8** y uno irrelevante (aviso
+de privacidad) con **-4.4** — discriminación clara. Verificado también de punta a punta vía
+`POST /chat` con retrieval híbrido + MMR + reranker + generación, todos activos por defecto.
