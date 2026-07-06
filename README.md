@@ -149,7 +149,7 @@ a cada fase).
 - [x] Fase 1 — Estructura base del repositorio
 - [x] Fase 2 — Web scraping (149/150 páginas reales descargadas de bbva.mx, ver decisión abajo)
 - [x] Fase 3 — Limpieza y normalización de datos (146 páginas limpias en `data/processed/`)
-- [x] Fase 4 — Chunking, embeddings e indexación vectorial (870 chunks en ChromaDB)
+- [x] Fase 4 — Chunking, embeddings e indexación vectorial (2686 chunks en ChromaDB tras ampliar el corpus, ver Fase 2)
 - [x] Fase 5 — Pipeline RAG base (retrieval + Ollama, probado por CLI)
 - [x] Fase 6 — API de chat (FastAPI, probada en vivo con `POST /chat`)
 - [x] Fase 7 — Historial de conversación persistente (SQLite, ventana N configurable)
@@ -260,6 +260,17 @@ python -m scraper.run_scraper
 149/150 páginas descargadas correctamente (~36 MB de HTML crudo). El único error es un
 `404` real de una landing dada de baja (`/personas/landings/apoyos/Consejeria_CIFEM.html`).
 
+**Ajuste posterior de alcance:** la corrida inicial priorizaba simplemente `/personas/` y
+`/empresas/` en el orden del sitemap, lo que llenó el cupo de 150 páginas con artículos de
+educación financiera y columnas de inversión antes de llegar al catálogo real de productos
+(`/personas/productos/tarjetas-de-credito.html` y similares) — se detectó al probar la app
+en vivo: preguntar por tarjetas de crédito no traía nada útil. Se corrigió priorizando
+`/personas/productos/` y `/empresas/productos/` primero (`SCRAPER_SECTIONS` en `.env`) y
+subiendo `SCRAPER_MAX_PAGES` a 300. Resultado de la re-corrida: 299/300 páginas OK,
+incluyendo ahora sí el catálogo real de tarjetas, cuentas, créditos y seguros — verificado
+preguntándole a la app en vivo por tarjetas de crédito y obteniendo una respuesta correcta
+citando las páginas de producto reales.
+
 ### Supuestos y limitaciones de esta fase
 
 - Se respetan las reglas de `Disallow` declaradas en `robots.txt` de bbva.mx.
@@ -332,8 +343,11 @@ python -m indexing.run_indexer
 
 ### Resultado de la corrida
 
-**146 documentos → 870 chunks indexados** en la colección `bbva_docs` de ChromaDB
-(persistida en `data/chroma/`).
+**146 documentos → 870 chunks indexados** en la primera corrida. Tras ampliar el alcance
+del scraper para incluir el catálogo real de productos (ver Fase 2), una re-indexación
+sobre el corpus ampliado dio **436 documentos → 2686 chunks** en la colección `bbva_docs`
+de ChromaDB (persistida en `data/chroma/` en modo local, o en el volumen del contenedor de
+Chroma en modo Docker).
 
 ## Fase 5 — Pipeline RAG base
 
