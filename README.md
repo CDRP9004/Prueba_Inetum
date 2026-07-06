@@ -21,7 +21,7 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 10 — Reranker (cross-encoder multilingüe)
 - [x] Fase 11 — Observabilidad con Langfuse (implementada; sin cuenta propia para verificar trazas en vivo, ver limitación)
 - [x] Fase 12 — Dockerización completa (probado de punta a punta, stack real corriendo en contenedores)
-- [ ] Fase 13 — Evaluación con RAGAS
+- [x] Fase 13 — Evaluación con RAGAS (10 preguntas reales, resultados en el README)
 - [ ] Fase 14 — Analítica del histórico de conversaciones
 - [ ] Fase 15 — Manejo de errores y endurecimiento
 - [ ] Fase 16 — README final
@@ -481,3 +481,79 @@ desarrollo local). También se verificaron `GET /` (interfaz web) y `GET /histor
 **Nota técnica:** la imagen oficial de `chromadb/chroma` no incluye `curl` ni `wget`, así que
 su healthcheck usa `bash -c '</dev/tcp/localhost/8000'` (chequeo TCP) en vez del patrón
 `curl -f http://...` más común.
+
+## Fase 13 — Evaluación con RAGAS
+
+### Dataset
+
+`eval/dataset.py`: 10 preguntas con `ground_truth` escritos a mano a partir de contenido
+**real** verificado en `data/processed/` (Casa de Bolsa, Banca Patrimonial, seguros de
+vida, robo/extravío de tarjeta, cofinanciamiento Infonavit/Fovissste, etc.) — no generadas
+sintéticamente ni inventadas, para evaluar contra hechos verdaderos del corpus.
+
+### Por qué dos etapas en dos virtualenvs distintos
+
+`ragas>=0.4` (la versión más reciente) requiere una versión de `langchain-community` que
+eliminó el submódulo `langchain_community.chat_models.vertexai` que ragas sigue importando
+internamente — es un bug de compatibilidad entre el ragas actual y el langchain actual,
+irresoluble por pines de versión sin romper otras dependencias (`instructor` vs
+`langchain-openai` piden versiones de `openai` mutuamente excluyentes). La salida estable:
+usar `ragas==0.1.21` (misma API de `evaluate()` para las métricas que necesitamos) con su
+propia familia de `langchain` 0.2.x, en un **virtualenv separado** (`.venv-eval`,
+`requirements-eval.txt`) que no toca las dependencias del venv principal de la app (que no
+usa `langchain` en absoluto).
+
+Por eso la evaluación se corre en dos pasos:
+
+```bash
+# 1) Generación: corre el pipeline RAG real (venv principal) y guarda
+#    pregunta + respuesta + contextos + ground_truth
+source .venv/bin/activate
+python -m eval.generate_dataset
+
+# 2) Scoring: calcula las métricas de RAGAS (venv aislado)
+python3 -m venv .venv-eval && source .venv-eval/bin/activate
+pip install -r requirements-eval.txt
+python -m eval.run_ragas
+```
+
+### Métricas y juez LLM
+
+`faithfulness`, `answer_relevancy`, `context_precision`, `context_recall` — las 4 métricas
+"clásicas" de RAGAS. Como juez LLM se usa **el mismo Ollama self-hosted** (`llama3.2:3b` por
+defecto, configurable con `RAGAS_JUDGE_MODEL`) en vez de GPT-4, para mantener el stack 100%
+gratuito/self-hosted; los embeddings para `answer_relevancy` usan el mismo
+`multilingual-e5-small` del resto del proyecto.
+
+### Resultados obtenidos (reales, corpus de bbva.mx)
+
+| Métrica | Promedio |
+|---|---|
+| faithfulness | 0.685 |
+| answer_relevancy | 0.706 |
+| context_precision | 1.000 |
+| context_recall | 0.630 |
+
+Reporte detallado por pregunta en `eval/output/report.json` (no versionado, se regenera).
+
+### Limitaciones honestas
+
+1. **Juez LLM local y pequeño (3B) en vez de GPT-4.** RAGAS fue diseñado y validado
+   originalmente con LLMs mucho más grandes como juez. Un modelo de 3B parámetros puede
+   ser inconsistente descomponiendo enunciados o siguiendo el formato estructurado exacto
+   que RAGAS espera del juez — de hecho, en la corrida real se registraron 2 warnings
+   `"Failed to parse output. Returning None"` (de 40 llamadas), que RAGAS maneja
+   devolviendo `None` para esa sub-evaluación en vez de romper toda la corrida. Los
+   números son una señal útil y honesta, pero probablemente más ruidosos que con un juez
+   más grande.
+2. **Concurrencia con Ollama en CPU.** El primer intento, con la concurrencia por defecto
+   de RAGAS (16 workers), saturó el único servidor de Ollama y la mayoría de los jobs
+   fallaron con `TimeoutError` (`faithfulness` salió en 0.4 y `context_precision` en
+   `NaN` — no eran los valores reales, era saturación). Bajar a `max_workers=2` y subir el
+   timeout a 300s (`eval/run_ragas.py::OLLAMA_RUN_CONFIG`) resolvió el problema, a costa de
+   una corrida más lenta (~26 min para 10 preguntas × 4 métricas). Con un LLM servido por
+   una API con más capacidad de concurrencia, esto no sería necesario.
+3. **Dataset de 10 preguntas.** Suficiente para demostrar el pipeline de evaluación
+   funcionando de punta a punta con métricas reales, pero chico para conclusiones
+   estadísticamente robustas sobre la calidad del sistema. Ampliarlo es una mejora futura
+   natural (ver sección de mejoras futuras).

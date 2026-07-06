@@ -1,0 +1,18 @@
+# Dependencias de la Fase 13 (evaluación con RAGAS), instaladas en un virtualenv
+# SEPARADO (.venv-eval) del resto del proyecto.
+#
+# Por qué: ragas>=0.4 requiere langchain-community reciente, que eliminó el submódulo
+# `langchain_community.chat_models.vertexai` que ragas sigue importando en su código (bug
+# de compatibilidad entre ragas 0.4.x y el langchain actual). Forzar versiones compatibles
+# de todo el stack langchain choca con las versiones que usan langchain-ollama/langgraph
+# más nuevos. La salida más simple y estable: usar ragas 0.1.21 (API de evaluate() igual
+# para lo que necesitamos) con su propia familia de langchain 0.2.x, aislada del venv
+# principal de la app (que no usa langchain en absoluto).
+#
+# Instalación: python3 -m venv .venv-eval && source .venv-eval/bin/activate
+#              pip install -r requirements-eval.txt
+ragas==0.1.21
+langchain-community==0.2.19
+datasets==5.0.0
+sentence-transformers==5.6.0
+python-dotenv==1.2.2
