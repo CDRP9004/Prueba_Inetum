@@ -10,3 +10,4 @@ uvicorn[standard]==0.50.0
 sqlalchemy==2.0.51
 rank-bm25==0.2.2
 langfuse==4.13.0
+httpx==0.28.1

@@ -1,11 +1,14 @@
 """Endpoint de analítica del histórico de conversaciones: GET /analytics/summary."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+import logging
+
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from analytics.metrics import compute_summary
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -25,7 +28,12 @@ class AnalyticsSummaryResponse(BaseModel):
 
 @router.get("/analytics/summary", response_model=AnalyticsSummaryResponse)
 def analytics_summary() -> AnalyticsSummaryResponse:
-    summary = compute_summary()
+    try:
+        summary = compute_summary()
+    except Exception:
+        logger.exception("Error calculando el resumen de analítica")
+        raise HTTPException(status_code=500, detail="No se pudo calcular la analítica del histórico.")
+
     return AnalyticsSummaryResponse(
         total_sessions=summary.total_sessions,
         total_messages=summary.total_messages,

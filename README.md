@@ -23,7 +23,7 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 12 — Dockerización completa (probado de punta a punta, stack real corriendo en contenedores)
 - [x] Fase 13 — Evaluación con RAGAS (10 preguntas reales, resultados en el README)
 - [x] Fase 14 — Analítica del histórico de conversaciones (CLI + API + página web, probado con datos reales)
-- [ ] Fase 15 — Manejo de errores y endurecimiento
+- [x] Fase 15 — Manejo de errores y endurecimiento
 - [ ] Fase 16 — README final
 
 ## Decisión sobre el sitio objetivo
@@ -599,3 +599,37 @@ seguro, vida, ...
 La latencia (~17s promedio) refleja el costo real de correr retrieval híbrido + reranker +
 generación con un LLM de 3B en CPU sin GPU — un dato honesto y esperable para este stack,
 y justamente el tipo de métrica de impacto que esta funcionalidad busca visibilizar.
+
+## Fase 15 — Manejo de errores y endurecimiento
+
+- **Validación de entrada** (`app/schemas.py`): `ChatRequest` ahora exige `session_id` y
+  `message` no vacíos (`min_length=1`) y acota `message` a 4000 caracteres
+  (`max_length=4000`) — devuelve `422` con el detalle del campo inválido, en vez de dejar
+  pasar entradas basura al pipeline.
+- **Errores específicos en `/chat`** (`app/routers/chat.py`): `503` si Ollama no responde
+  (`requests.exceptions.RequestException`), `503` si ChromaDB no responde
+  (`httpx.ConnectError`), `500` genérico con logging para cualquier otro fallo del
+  pipeline — cada caso con un mensaje entendible para quien está probando la API, no un
+  traceback crudo.
+- **Error handling agregado a `/history/{id}` y `/analytics/summary`**: antes no tenían
+  ningún manejo de errores propio (Fase 7 y 14 asumían el camino feliz); ahora ambos
+  capturan excepciones inesperadas y devuelven `500` con mensaje claro en vez de que
+  FastAPI exponga el error interno.
+- **Manejador global de excepciones** (`app/main.py::unhandled_exception_handler`): red de
+  seguridad final — cualquier excepción no capturada explícitamente en un endpoint devuelve
+  `500` con `{"detail": "Ocurrió un error interno inesperado."}` en vez de filtrar un
+  traceback interno, y queda logueada del lado del servidor para debug.
+- Verificado en vivo: mensaje vacío, `session_id` vacío, mensaje de 5000 caracteres,
+  request sin el campo `message`, historial de una sesión inexistente, y analítica sin
+  datos — todos responden con el código y mensaje esperado sin romper el servidor.
+
+### Hallazgo real durante las pruebas (bonus de endurecimiento)
+
+Al alternar entre correr la app en Docker (que corre como `root` dentro del contenedor) y
+en bare-metal contra el **mismo** `data/history.db` montado por volumen, el contenedor deja
+el archivo SQLite con dueño `root`, y el proceso bare-metal (usuario normal) no puede
+escribirlo (`attempt to write a readonly database`). No es un bug del código de la app —es
+el comportamiento esperable de mezclar ambos modos de ejecución sobre el mismo archivo—
+pero vale la pena documentarlo: si esto pasa, `rm data/history.db` (o corregir el dueño del
+archivo) y se recrea automáticamente con los permisos correctos la próxima vez que se
+escriba desde ese entorno.

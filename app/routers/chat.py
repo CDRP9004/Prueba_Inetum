@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import time
 
+import httpx
 import requests
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -40,6 +41,13 @@ def chat(
                 status_code=503,
                 detail="El modelo de lenguaje no está disponible en este momento. "
                 "Verificá que Ollama esté corriendo.",
+            )
+        except httpx.ConnectError:
+            logger.exception("No se pudo contactar a ChromaDB")
+            raise HTTPException(
+                status_code=503,
+                detail="La base de datos vectorial no está disponible en este momento. "
+                "Verificá que ChromaDB esté corriendo.",
             )
         except Exception:
             logger.exception("Error inesperado en el pipeline RAG")
