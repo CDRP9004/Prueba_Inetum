@@ -1,11 +1,141 @@
 # Asistente RAG sobre sitio web bancario (BBVA)
 
-Sistema de Retrieval-Augmented Generation que permite consultar, mediante una interfaz
-conversacional, el contenido publicado en el sitio web institucional de un banco.
+Sistema de Retrieval-Augmented Generation (RAG) que permite consultar, mediante una
+interfaz conversacional, el contenido publicado en el sitio web institucional de un banco
+(BBVA México — ver [decisión sobre el sitio objetivo](#decisión-sobre-el-sitio-objetivo)).
+Scraping propio, base vectorial self-hosted, LLM local vía Ollama, retrieval híbrido +
+reranker, historial persistente, observabilidad con Langfuse, evaluación con RAGAS,
+analítica de conversaciones y todo dockerizado.
 
-> Este README se irá completando a medida que avanzan las fases del proyecto. Al cierre
-> incluirá: requisitos previos, instrucciones de arranque con Docker, uso de la interfaz,
-> patrones de diseño aplicados, stack tecnológico y justificación, limitaciones y mejoras futuras.
+Este README documenta el proyecto completo. Las secciones de arriba son la guía rápida
+(requisitos, cómo levantarlo, patrones, stack, limitaciones, mejoras futuras); más abajo
+está el detalle fase por fase con las decisiones de diseño y los resultados reales
+obtenidos en cada una.
+
+## Requisitos previos
+
+- **Docker** y **Docker Compose** (`docker compose version` — se usa la sintaxis `docker
+  compose`, no el standalone `docker-compose`).
+- **~15 GB de espacio libre en disco**: imagen de la app con `torch`/`sentence-transformers`
+  (~9 GB), imagen de Ollama + el modelo `llama3.2:3b` (~10 GB combinados), Chroma.
+- **Conexión a internet** para: el build inicial (descarga de dependencias de Python), el
+  pull de imágenes de Docker, la descarga del modelo de Ollama, y el scraping inicial del
+  sitio (una sola vez, para poblar los datos).
+- No hace falta ninguna API key de pago — todo el stack es open source / self-hosted (ver
+  [stack tecnológico](#stack-tecnológico-y-justificación)). Langfuse es opcional (Fase 11).
+
+## Cómo levantar el sistema (desde cero)
+
+```bash
+# 1. Clonar y configurar variables de entorno
+git clone <url-del-repo> && cd Prueba_Inetum
+cp .env.example .env
+
+# 2. Levantar la infraestructura (Chroma + Ollama)
+docker compose up -d chromadb ollama
+
+# 3. Descargar el modelo de LLM (una sola vez; queda en un volumen Docker persistente)
+docker compose up ollama-init
+
+# 4. Poblar los datos: scraping + limpieza + indexación (una sola vez, o para refrescar)
+docker compose --profile ingest run --rm ingest
+
+# 5. Levantar la app
+docker compose up -d app
+```
+
+Arrancadas posteriores (datos y modelo ya persistidos en volúmenes): alcanza con
+`docker compose up -d`. Detalle completo, arquitectura de servicios y por qué la ingesta de
+datos es un paso separado en la [Fase 12](#fase-12--dockerización-completa).
+
+## Cómo usar la interfaz
+
+- **Chat conversacional:** abrir `http://localhost:8000/` en el navegador. El campo de
+  sesión se genera y persiste solo (en `localStorage`); recargar la página mantiene el
+  historial. Cada respuesta muestra sus fuentes (título + link a la página real de bbva.mx).
+- **Analítica del histórico:** `http://localhost:8000/analytics` — sesiones, mensajes,
+  latencia, temas más preguntados.
+- **API directa:**
+  ```bash
+  curl -X POST http://localhost:8000/chat \
+    -H "Content-Type: application/json" \
+    -d '{"session_id": "demo", "message": "¿Qué es la Casa de Bolsa de BBVA?"}'
+  ```
+- **Documentación interactiva de la API:** `http://localhost:8000/docs` (Swagger, generado
+  automáticamente por FastAPI).
+
+## Patrones de diseño
+
+Se implementaron **6** (el mínimo pedido era 3), cubriendo las tres categorías:
+
+| Patrón | Categoría | Dónde | Por qué |
+|---|---|---|---|
+| **Factory Method** | Creacional | `indexing/embeddings.py::build_embedder` | El resto del código depende de la interfaz `Embedder`, no de `sentence-transformers`; cambiar de modelo/proveedor de embeddings es un cambio local a este archivo. |
+| **Strategy** | Comportamental | `rag/retriever.py::Retriever` (+ `DenseRetriever`, `HybridRetriever`) | El pipeline RAG no sabe qué algoritmo de retrieval usa; se elige por config (`USE_HYBRID_SEARCH`) sin tocar `RAGPipeline`. |
+| **Chain of Responsibility** | Comportamental | `rag/pipeline.py::RAGPipeline` + `PipelineStep` | Retrieval → rerank (opcional) → generación como una cadena de steps; la Fase 10 insertó el rerank agregando un step, sin modificar los demás. |
+| **Repository** | Estructural (acceso a datos) | `history/repository.py::ConversationRepository` | Aísla el resto de la app de SQLAlchemy/SQLite; cambiar a Postgres sería un cambio contenido a este módulo. |
+| **Singleton** (vía `lru_cache`) | Creacional | `app/dependencies.py`, `indexing/embeddings.py`, `indexing/vector_store.py`, `rag/reranker.py` | Embedder, pipeline, cliente de Chroma y cross-encoder cargan modelos pesados en memoria; se construyen una sola vez por proceso. |
+| **Decorator** | Estructural | `observability/traced_step.py::TracedStep` | Envuelve cualquier `PipelineStep` agregándole una observación de Langfuse, sin que `RetrievalStep`/`RerankStep`/`GenerationStep` sepan que Langfuse existe. |
+
+Detalle de cada uno, con el razonamiento completo, en la sección de la fase donde se
+introdujo (enlaces en la tabla de arriba apuntan al archivo; el "Estado actual" abajo enlaza
+a cada fase).
+
+## Stack tecnológico y justificación
+
+| Capa | Elección | Por qué |
+|---|---|---|
+| Scraping | `requests` + `BeautifulSoup4` | Contenido de bbva.mx es HTML estático/SSR; no hace falta un navegador headless. |
+| Almacenamiento crudo/limpio | Filesystem (`data/raw/`, `data/processed/`) | Simple, versionable en estructura (no en contenido), suficiente para el alcance. |
+| Embeddings | `intfloat/multilingual-e5-small` (self-hosted, gratis) | Multilingüe (español), corre en CPU, sin costo — cumple la preferencia por herramientas gratuitas. |
+| Base vectorial | ChromaDB (self-hosted) | Tier gratuito/self-hosted, cliente Python simple, buen soporte de metadata/filtros. |
+| Retrieval | Híbrido: denso (Chroma) + BM25 (`rank_bm25`) + RRF + MMR | Combina recall semántico y léxico; MMR evita redundancia en el contexto final. |
+| Reranker | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` (self-hosted) | Multilingüe, liviano, mejora precisión antes de generar (bonus explícito del enunciado). |
+| LLM de generación | Ollama + `llama3.2:3b` (self-hosted, gratis) | Corre en CPU sin GPU, sin costo de API, cumple la preferencia por modelos open source. |
+| Historial | SQLite + SQLAlchemy | Cero infraestructura adicional, persistente en volumen Docker, alcanza para el volumen esperado. |
+| API / interfaz | FastAPI + HTML/JS autocontenido | Pedido explícito del usuario; interfaz mínima sin build step ni frameworks de frontend. |
+| Observabilidad | Langfuse (self-hosted o cloud free tier) | Pedido explícito del usuario; degradación elegante si no hay cuenta configurada. |
+| Evaluación | RAGAS + Ollama como juez | Métricas estándar de RAG; juez local para mantener el stack 100% gratuito (con las limitaciones documentadas en la Fase 13). |
+| Contenedores | Docker + Docker Compose | Requisito obligatorio del enunciado; stack completo reproducible con un puñado de comandos. |
+
+## Limitaciones conocidas
+
+1. **Sitio objetivo cambiado de bbva.com.co a bbva.mx.** El WAF de Akamai de BBVA Colombia
+   bloqueó de forma persistente la IP de desarrollo (confirmado incluso reproduciendo el
+   bloqueo desde una segunda máquina) — detalle completo en
+   [Decisión sobre el sitio objetivo](#decisión-sobre-el-sitio-objetivo). El código es
+   agnóstico al sitio (todo vía `.env`); volver a bbva.com.co es cambiar dos variables.
+2. **Alcance del corpus:** 150 páginas de `/personas/` y `/empresas/` de bbva.mx (146 tras
+   limpieza), no el sitio completo (~3750 URLs). Ver [Fase 2](#fase-2--web-scraping).
+3. **Langfuse sin verificación visual real:** la instrumentación sigue la API pública del
+   SDK, pero no se pudo confirmar cómo se ven las trazas en un dashboard real por no tener
+   cuenta propia. Ver [Fase 11](#fase-11--observabilidad-con-langfuse).
+4. **RAGAS con juez LLM pequeño (3B) y dataset de 10 preguntas.** Resultados reales, pero
+   más ruidosos que con un juez grande (GPT-4) y una muestra chica. Ver
+   [Fase 13](#fase-13--evaluación-con-ragas).
+5. **Latencia alta (~17s promedio) en CPU sin GPU**, esperable corriendo retrieval híbrido +
+   reranker + LLM de 3B sin aceleración por hardware. Visible en la
+   [Fase 14](#fase-14--analítica-del-histórico-de-conversaciones).
+6. **Docker corre como root:** si se alterna entre Docker y bare-metal contra el mismo
+   `data/history.db`, el archivo puede quedar con dueño `root` y bloquear escrituras desde
+   el host. Ver [Fase 15](#fase-15--manejo-de-errores-y-endurecimiento).
+7. **Indexación no incremental:** cada corrida de `indexing/run_indexer.py` reconstruye la
+   colección de Chroma desde cero (simple y determinístico para el alcance de esta prueba).
+
+## Futuras mejoras
+
+- Reintentar el scraping de bbva.com.co cuando el bloqueo del WAF se disipe (el código ya
+  soporta cualquiera de los dos sitios vía `.env`).
+- Ampliar el corpus (más secciones, ej. el glosario de educación financiera) y el dataset
+  de evaluación de RAGAS más allá de 10 preguntas.
+- Indexación incremental (solo re-embeder páginas nuevas/modificadas, no toda la colección).
+- Usuario no-root en el `Dockerfile` (evita el gotcha de permisos documentado en la Fase 15).
+- Migrar historial de SQLite a Postgres si el volumen de conversaciones lo justifica.
+- Streaming de la respuesta del LLM en la UI (SSE/WebSockets) en vez de esperar la
+  respuesta completa — mejoraría la latencia percibida sin cambiar la latencia real.
+- Reescritura de query / HyDE como paso adicional del pipeline (encaja directo en la cadena
+  de `PipelineStep` ya existente).
+- CI (lint, tests automatizados) corriendo en cada push.
 
 ## Estado actual
 
@@ -24,7 +154,7 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 13 — Evaluación con RAGAS (10 preguntas reales, resultados en el README)
 - [x] Fase 14 — Analítica del histórico de conversaciones (CLI + API + página web, probado con datos reales)
 - [x] Fase 15 — Manejo de errores y endurecimiento
-- [ ] Fase 16 — README final
+- [x] Fase 16 — README final
 
 ## Decisión sobre el sitio objetivo
 
