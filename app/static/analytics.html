@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Analítica — Asistente BBVA</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f4f5f7;
+    color: #1a1a1a;
+    padding: 24px;
+  }
+  .container { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  a { color: #072146; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 20px 0; }
+  .card { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .card .value { font-size: 24px; font-weight: 700; color: #072146; }
+  .card .label { font-size: 12px; opacity: 0.7; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 12px; font-size: 13px; border-bottom: 1px solid #eee; }
+  th { background: #eceff3; }
+  section { margin-bottom: 28px; }
+  #empty { padding: 20px; background: #fff; border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Analítica del histórico de conversaciones</h1>
+  <p><a href="/">&larr; Volver al chat</a></p>
+  <div id="content"></div>
+</div>
+
+<script>
+async function load() {
+  const resp = await fetch("/analytics/summary");
+  const d = await resp.json();
+  const content = document.getElementById("content");
+
+  if (d.total_messages === 0) {
+    content.innerHTML = '<div id="empty">Todavía no hay conversaciones registradas.</div>';
+    return;
+  }
+
+  const cards = [
+    ["Sesiones", d.total_sessions],
+    ["Mensajes totales", d.total_messages],
+    ["Mensajes por sesión (prom.)", d.avg_messages_per_session.toFixed(1)],
+    ["Latencia promedio", d.avg_latency_ms ? Math.round(d.avg_latency_ms) + " ms" : "—"],
+    ["Latencia p95", d.p95_latency_ms ? Math.round(d.p95_latency_ms) + " ms" : "—"],
+  ];
+
+  let html = '<section><div class="cards">';
+  for (const [label, value] of cards) {
+    html += `<div class="card"><div class="value">${value}</div><div class="label">${label}</div></div>`;
+  }
+  html += '</div></section>';
+
+  html += '<section><h3>Mensajes por día</h3><table><tr><th>Día</th><th>Mensajes</th></tr>';
+  for (const [day, count] of Object.entries(d.messages_per_day)) {
+    html += `<tr><td>${day}</td><td>${count}</td></tr>`;
+  }
+  html += '</table></section>';
+
+  html += '<section><h3>Temas más frecuentes en preguntas</h3><table><tr><th>Palabra</th><th>Menciones</th></tr>';
+  for (const [word, count] of d.top_keywords) {
+    html += `<tr><td>${word}</td><td>${count}</td></tr>`;
+  }
+  html += '</table></section>';
+
+  content.innerHTML = html;
+}
+
+load();
+</script>
+</body>
+</html>

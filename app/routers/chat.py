@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,6 +29,8 @@ def chat(
 
     history = repository.get_recent_messages(request.session_id, history_config.window_n)
 
+    started_at = time.perf_counter()
+
     with traced_chat_request(request.session_id, request.message) as root_observation:
         try:
             result = pipeline.run(request.message, history=history)
@@ -45,8 +48,10 @@ def chat(
         if root_observation is not None:
             root_observation.update(output={"answer": result.answer})
 
+    latency_ms = int((time.perf_counter() - started_at) * 1000)
+
     repository.add_message(request.session_id, "user", request.message)
-    repository.add_message(request.session_id, "assistant", result.answer)
+    repository.add_message(request.session_id, "assistant", result.answer, latency_ms=latency_ms)
 
     return ChatResponse(
         answer=result.answer,

@@ -22,7 +22,7 @@ conversacional, el contenido publicado en el sitio web institucional de un banco
 - [x] Fase 11 — Observabilidad con Langfuse (implementada; sin cuenta propia para verificar trazas en vivo, ver limitación)
 - [x] Fase 12 — Dockerización completa (probado de punta a punta, stack real corriendo en contenedores)
 - [x] Fase 13 — Evaluación con RAGAS (10 preguntas reales, resultados en el README)
-- [ ] Fase 14 — Analítica del histórico de conversaciones
+- [x] Fase 14 — Analítica del histórico de conversaciones (CLI + API + página web, probado con datos reales)
 - [ ] Fase 15 — Manejo de errores y endurecimiento
 - [ ] Fase 16 — README final
 
@@ -557,3 +557,45 @@ Reporte detallado por pregunta en `eval/output/report.json` (no versionado, se r
    funcionando de punta a punta con métricas reales, pero chico para conclusiones
    estadísticamente robustas sobre la calidad del sistema. Ampliarlo es una mejora futura
    natural (ver sección de mejoras futuras).
+
+## Fase 14 — Analítica del histórico de conversaciones
+
+Se agregó `latency_ms` a `history/models.py::Message` (nullable, solo se completa en
+mensajes del asistente) — `app/routers/chat.py` mide el tiempo de `pipeline.run()` con
+`time.perf_counter()` y lo guarda junto con la respuesta. Esto habilita métricas de
+impacto/performance, no solo de contenido.
+
+Módulo `analytics/`:
+
+- `keywords.py`: extracción simple de palabras clave (regex + stopwords en español) sobre
+  los mensajes de **usuario** (no las respuestas del asistente), para ver qué temas
+  preguntan realmente los usuarios.
+- `metrics.py`: `compute_summary()` calcula, sobre toda la tabla `messages` de
+  `history.db`: sesiones totales, mensajes totales (y por rol), promedio de mensajes por
+  sesión, latencia promedio y p95 de respuesta, mensajes por día, y las palabras clave más
+  frecuentes.
+- `run_report.py`: CLI (`python -m analytics.run_report`) que imprime el reporte en
+  terminal — la funcionalidad de "recorrer el histórico para extraer métricas" pedida,
+  utilizable sin la API.
+
+Expuesto también vía API (`app/routers/analytics.py`, `GET /analytics/summary`) y una
+página mínima (`app/static/analytics.html`, `GET /analytics`) con tarjetas de resumen y
+tablas — mismo criterio "funcional, no bonita" que la interfaz de chat.
+
+### Resultado con datos reales
+
+Se generaron 5 conversaciones reales de prueba (2 sesiones) y se corrió tanto el CLI como
+la API:
+
+```
+Sesiones (conversaciones): 2
+Mensajes totales: 10 (5 de usuario, 5 del asistente)
+Promedio de mensajes por sesión: 5.0
+Latencia promedio de respuesta: 17045 ms (p95: 25088 ms)
+Temas más frecuentes: crédito (2), casa, bolsa, banca, patrimonial, privada, tarjetas,
+seguro, vida, ...
+```
+
+La latencia (~17s promedio) refleja el costo real de correr retrieval híbrido + reranker +
+generación con un LLM de 3B en CPU sin GPU — un dato honesto y esperable para este stack,
+y justamente el tipo de métrica de impacto que esta funcionalidad busca visibilizar.

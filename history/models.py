@@ -1,7 +1,8 @@
 """Modelo ORM (SQLAlchemy) de un mensaje de conversación."""
 from datetime import datetime, timezone
+from typing import Optional
 
-from sqlalchemy import DateTime, String, Text
+from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -19,3 +20,6 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc), index=True
     )
+    # Tiempo de respuesta del pipeline RAG en milisegundos. Solo aplica a mensajes del
+    # asistente (Fase 14: métricas de impacto/latencia sobre el histórico).
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

@@ -6,14 +6,18 @@ Patrón Repository: el resto de la aplicación (endpoints de la API, pipeline RA
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from history.db import SessionLocal
 from history.models import Message
 
 
 class ConversationRepository:
-    def add_message(self, session_id: str, role: str, content: str) -> None:
+    def add_message(
+        self, session_id: str, role: str, content: str, latency_ms: Optional[int] = None
+    ) -> None:
         with SessionLocal() as session:
-            session.add(Message(session_id=session_id, role=role, content=content))
+            session.add(Message(session_id=session_id, role=role, content=content, latency_ms=latency_ms))
             session.commit()
 
     def get_recent_messages(self, session_id: str, limit: int) -> list[tuple[str, str]]:
