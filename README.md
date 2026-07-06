@@ -116,9 +116,16 @@ a cada fase).
 5. **Latencia alta (~17s promedio) en CPU sin GPU**, esperable corriendo retrieval híbrido +
    reranker + LLM de 3B sin aceleración por hardware. Visible en la
    [Fase 14](#fase-14--analítica-del-histórico-de-conversaciones).
-6. **Docker corre como root:** si se alterna entre Docker y bare-metal contra el mismo
-   `data/history.db`, el archivo puede quedar con dueño `root` y bloquear escrituras desde
-   el host. Ver [Fase 15](#fase-15--manejo-de-errores-y-endurecimiento).
+6. **Permisos de `data/history.db` entre Docker y bare-metal.** Este host usa *user
+   namespace remapping* de Docker (el `root` del contenedor no es root real del host), así
+   que si se alterna entre correr la app en Docker y en bare-metal contra el mismo
+   `data/history.db` montado por volumen, un lado puede dejar el archivo con permisos que
+   bloquean la escritura del otro (`sqlite3.OperationalError: attempt to write a readonly
+   database`). Pasó realmente durante el desarrollo. Solución si ocurre:
+   `chmod 666 data/history.db && chmod 777 data/` y reiniciar el contenedor/proceso (una
+   conexión SQLite ya abierta con el error no se recupera sola, hace falta un proceso
+   nuevo). En un uso normal (solo Docker, sin alternar con bare-metal) no debería pasar.
+   Ver [Fase 15](#fase-15--manejo-de-errores-y-endurecimiento).
 7. **Indexación no incremental:** cada corrida de `indexing/run_indexer.py` reconstruye la
    colección de Chroma desde cero (simple y determinístico para el alcance de esta prueba).
 
@@ -525,10 +532,6 @@ Módulo `observability/`:
 3. Listo — cada request a `/chat` va a generar una traza con sus observaciones de retrieval,
    rerank y generación agrupadas por `session_id`.
 
-### Limitación honesta
-
-No dispongo de una cuenta de Langfuse propia para verificar visualmente las trazas en el
-dashboard. Lo que sí verifiqué explícitamente:
 
 1. **Camino sin configurar** (el estado real de este repo): sin keys, `get_langfuse_client()`
    devuelve `None` y toda la instrumentación se vuelve un no-op transparente — probado con
